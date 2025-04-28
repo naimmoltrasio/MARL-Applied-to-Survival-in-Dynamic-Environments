@@ -4,6 +4,7 @@ from copy import copy
 import numpy as np
 from gymnasium.spaces import Discrete, MultiDiscrete
 from pettingzoo import ParallelEnv
+import pygame
 
 
 class CollaborativePickUpEnv(ParallelEnv):
@@ -94,23 +95,36 @@ class CollaborativePickUpEnv(ParallelEnv):
     def _move_agent(self, agent, action):
         if agent == "agent_1":
             x, y = self.agent1_x, self.agent1_y
+            other_x, other_y = self.agent2_x, self.agent2_y
         else:
             x, y = self.agent2_x, self.agent2_y
+            other_x, other_y = self.agent1_x, self.agent1_y
+
+        new_x, new_y = x, y
 
         if action == 0 and x > 0:
-            x -= 1
+            new_x -= 1
         elif action == 1 and x < 6:
-            x += 1
+            new_x += 1
         elif action == 2 and y > 0:
-            y -= 1
+            new_y -= 1
         elif action == 3 and y < 6:
-            y += 1
+            new_y += 1
         # acción 4 es PICK_UP → no mueve
 
+        # Verifica si la nueva posición está ocupada por un objeto no recogido
+        if (new_x, new_y) in [pos for i, pos in enumerate(self.objects) if i not in self.collected]:
+            return  # movimiento bloqueado, se queda donde está
+
+        # Verifica si nueva posición está ocupada por el otro agente
+        if (new_x, new_y) == (other_x, other_y):
+            return  # Bloqueado por el otro agente
+
+        # Aplica el movimiento
         if agent == "agent_1":
-            self.agent1_x, self.agent1_y = x, y
+            self.agent1_x, self.agent1_y = new_x, new_y
         else:
-            self.agent2_x, self.agent2_y = x, y
+            self.agent2_x, self.agent2_y = new_x, new_y
 
     def _action_mask(self, x, y):
         mask = np.ones(5, dtype=np.int8)  # 5 acciones: 4 mov + 1 pick_up
@@ -128,12 +142,45 @@ class CollaborativePickUpEnv(ParallelEnv):
             (x + 7 * y) if i not in self.collected else 48  # marcamos recogido como 48 (fuera de rango)
             for i, (x, y) in enumerate(self.objects)
         ]
-        return (agent1_pos, agent2_pos, *object_pos)
+        return agent1_pos, agent2_pos, *object_pos
 
     def _is_adjacent(self, ax, ay, ox, oy):
         return abs(ax - ox) + abs(ay - oy) == 1
 
     def render(self):
+        cell_size = 80
+        width, height = 7 * cell_size, 7 * cell_size
+
+        if not hasattr(self, "screen"):
+            pygame.init()
+            self.screen = pygame.display.set_mode((width, height))
+            pygame.display.set_caption("Collaborative Pick Up")
+            self.clock = pygame.time.Clock()
+
+        self.screen.fill((255, 255, 255))  # blanco
+
+        # Dibujar celdas del grid
+        for y in range(7):
+            for x in range(7):
+                rect = pygame.Rect(x * cell_size, y * cell_size, cell_size, cell_size)
+                pygame.draw.rect(self.screen, (200, 200, 200), rect, 1)  # borde gris
+
+        # Dibujar objetos
+        for i, (x, y) in enumerate(self.objects):
+            if i not in self.collected:
+                center = (x * cell_size + cell_size // 2, y * cell_size + cell_size // 2)
+                pygame.draw.circle(self.screen, (0, 0, 255), center, 20)  # objeto azul
+
+        # Dibujar agentes
+        agent1_pos = (self.agent1_x * cell_size + 20, self.agent1_y * cell_size + 20)
+        agent2_pos = (self.agent2_x * cell_size + 20, self.agent2_y * cell_size + 20)
+
+        pygame.draw.rect(self.screen, (255, 0, 0), (*agent1_pos, 40, 40))  # Agente 1 rojo
+        pygame.draw.rect(self.screen, (0, 255, 0), (*agent2_pos, 40, 40))  # Agente 2 verde
+
+        pygame.display.flip()
+        self.clock.tick(self.metadata["render_fps"])
+        """
         grid = np.full((7, 7), ".", dtype=str)
         for i, (x, y) in enumerate(self.objects):
             if i not in self.collected:
@@ -153,6 +200,8 @@ class CollaborativePickUpEnv(ParallelEnv):
 
         print("\n".join([" ".join(row) for row in grid]))
         print()
+        """
+
 
     @functools.lru_cache(maxsize=None)
     def observation_space(self, agent):

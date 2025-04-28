@@ -1,13 +1,28 @@
-from custom_environment import *
+from env.custom_environment import *
 from pettingzoo.test import parallel_api_test
 
 if __name__ == "__main__":
 
+    env = CollaborativePickUpEnv()
+    obs, infos = env.reset()
+
+    for _ in range(100):
+        actions = {
+            "agent_1": env.action_space("agent_1").sample(),
+            "agent_2": env.action_space("agent_2").sample(),
+        }
+        obs, rewards, terminations, truncations, infos = env.step(actions)
+        env.render()
+
+    pygame.quit()
     """
+    TEST PARALLEL API
     env = CollaborativePickUpEnv()
     parallel_api_test(env, num_cycles=1_000_000)
     """
 
+    """
+    TEST RENDER CMD
     env = CollaborativePickUpEnv()
     observations, infos = env.reset()
 
@@ -34,3 +49,7 @@ if __name__ == "__main__":
             env.render()
             print("Fin del episodio.")
             break
+    """
+
+
+

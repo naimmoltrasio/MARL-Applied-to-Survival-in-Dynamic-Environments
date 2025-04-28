@@ -1,4 +1,8 @@
 pettingzoo==1.24.3
+numpy==2.2.4
+gymnasium==1.1.1
+benchmarl==1.4.0
 
-numpy~=2.2.4
-gymnasium~=1.1.1
+
+torch>=1.13.0
+pygame>=2.3.0
