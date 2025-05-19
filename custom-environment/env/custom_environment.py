@@ -96,9 +96,9 @@ class CollaborativePickUpEnv(ParallelEnv):
         self._move_agent("agent_1", a1_action)
         self._move_agent("agent_2", a2_action)
 
-        rewards = {"agent_1": -0.01, "agent_2": -0.01}  # penalización leve por paso
+        rewards = {"agent_1": -0.01, "agent_2": -0.01}
 
-        # Pick-up automático si ambos están adyacentes al mismo objeto
+        # AMBOS ADYACENTES MISMO OBJETO, PICKUP
         for i, (ox, oy) in enumerate(self.objects):
             if i in self.collected:
                 continue
@@ -111,8 +111,7 @@ class CollaborativePickUpEnv(ParallelEnv):
                 rewards["agent_2"] += 5.0
                 break
 
-        # Recompensas intermedias
-
+        # RECOMPENSA EN FUNCIÓN DISTANCIA DE MANHATTAN
         for agent_name, (x_now, y_now, x_prev, y_prev) in zip(
                 ["agent_1", "agent_2"],
                 [(self.agent1_x, self.agent1_y, prev_a1_x, prev_a1_y),
@@ -128,7 +127,7 @@ class CollaborativePickUpEnv(ParallelEnv):
                 elif best_new_dist > best_prev_dist:
                     rewards[agent_name] -= 0.02
 
-        # Recompensa por estar adyacente a un objeto
+        # ADYACENTE A UN OBJETO
         for i, (ox, oy) in enumerate(self.objects):
             if i in self.collected:
                 continue
@@ -137,7 +136,7 @@ class CollaborativePickUpEnv(ParallelEnv):
             if self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy):
                 rewards["agent_2"] += 0.1
 
-        # Recompensa extra si ambos están adyacentes al mismo objeto
+        # AMBOS ADYACENTES AL MISMO OBJETO
         for i, (ox, oy) in enumerate(self.objects):
             if i in self.collected:
                 continue
@@ -179,7 +178,7 @@ class CollaborativePickUpEnv(ParallelEnv):
             my_x, my_y = a2
             other_x, other_y = a1
 
-        # Coordenadas normalizadas
+
         my_pos = [my_x / 6, my_y / 6]
         other_pos = [other_x / 6, other_y / 6]
 
@@ -221,17 +220,15 @@ class CollaborativePickUpEnv(ParallelEnv):
             new_y -= 1
         elif action == 3 and y < 6:
             new_y += 1
-        # acción 4 es PICK_UP → no mueve
 
         # Verifica si la nueva posición está ocupada por un objeto no recogido
         if (new_x, new_y) in [pos for i, pos in enumerate(self.objects) if i not in self.collected]:
-            return  # movimiento bloqueado, se queda donde está
+            return
 
         # Verifica si nueva posición está ocupada por el otro agente
         if (new_x, new_y) == (other_x, other_y):
-            return  # Bloqueado por el otro agente
+            return
 
-        # Aplica el movimiento
         if agent == "agent_1":
             self.agent1_x, self.agent1_y = new_x, new_y
         else:
@@ -268,21 +265,18 @@ class CollaborativePickUpEnv(ParallelEnv):
             pygame.display.set_caption("Collaborative Pick Up")
             self.clock = pygame.time.Clock()
 
-        self.screen.fill((255, 255, 255))  # blanco
+        self.screen.fill((255, 255, 255))
 
-        # Dibujar celdas del grid
         for y in range(7):
             for x in range(7):
                 rect = pygame.Rect(x * cell_size, y * cell_size, cell_size, cell_size)
                 pygame.draw.rect(self.screen, (200, 200, 200), rect, 1)  # borde gris
 
-        # Dibujar objetos
         for i, (x, y) in enumerate(self.objects):
             if i not in self.collected:
                 center = (x * cell_size + cell_size // 2, y * cell_size + cell_size // 2)
                 pygame.draw.circle(self.screen, (0, 0, 255), center, 20)  # objeto azul
 
-        # Dibujar agentes
         agent1_pos = (self.agent1_x * cell_size + 20, self.agent1_y * cell_size + 20)
         agent2_pos = (self.agent2_x * cell_size + 20, self.agent2_y * cell_size + 20)
 

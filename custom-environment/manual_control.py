@@ -66,13 +66,13 @@ def main():
 
                 # Reiniciar episodio si termina
                 if all(terminations.values()) or all(truncations.values()):
-                    print("💡 Episodio terminado. Reiniciando...\n")
+                    print("Episodio terminado\n")
                     obs, _ = env.reset()
                     env.render()
                     time.sleep(1)
 
     pygame.quit()
-    print("👋 Control manual finalizado.")
+    print("Control manual finalizado")
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,7 @@
 import time
 import pygame
 import numpy as np
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, A2C, DQN
 from pettingzoo.utils.conversions import aec_to_parallel
 from supersuit import pettingzoo_env_to_vec_env_v1, concat_vec_envs_v1
 from env.custom_environment import CollaborativePickUpEnv
@@ -14,7 +14,7 @@ vec_env = pettingzoo_env_to_vec_env_v1(env)
 vec_env = concat_vec_envs_v1(vec_env, num_vec_envs=1, num_cpus=1)
 
 # Cargar modelo entrenado
-model = PPO.load("ppo_collaborative_pickup")
+model = A2C.load("models/a2c_collaborative_pickup")
 
 print("🎯 Evaluando modelo...\n")
 
