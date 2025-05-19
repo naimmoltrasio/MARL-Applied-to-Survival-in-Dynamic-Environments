@@ -31,27 +31,42 @@ class CollaborativePickUpEnv(ParallelEnv):
         self.timestep = 0
         self.collected = set()
 
-        # Coloca 3 objetos aleatorios en el grid (sin repetir)
+        def _are_positions_valid(obj_positions):
+            for i, (x1, y1) in enumerate(obj_positions):
+                for j, (x2, y2) in enumerate(obj_positions):
+                    if i != j and abs(x1 - x2) + abs(y1 - y2) == 1:
+                        return False  # Son adyacentes
+            return True
+
+        # Coloca 3 objetos aleatorios en el grid (no adyacentes entre sí)
         self.objects = []
-        while len(self.objects) < 3:
-            pos = (random.randint(1, 5), random.randint(1, 5))
-            if pos not in self.objects:
-                self.objects.append(pos)
+        attempts = 0
+        while len(self.objects) < 3 and attempts < 1000:
+            candidate = (random.randint(1, 5), random.randint(1, 5))
+            if candidate in self.objects:
+                continue
+            temp = self.objects + [candidate]
+            if _are_positions_valid(temp):
+                self.objects.append(candidate)
+            attempts += 1
 
-            # Coloca a los agentes aleatoriamente (en celdas libres)
-            occupied_positions = set(self.objects)
-            while True:
-                pos1 = (random.randint(0, 6), random.randint(0, 6))
-                if pos1 not in occupied_positions:
-                    occupied_positions.add(pos1)
-                    self.agent1_x, self.agent1_y = pos1
-                    break
+        if len(self.objects) < 3:
+            raise RuntimeError("No se pudieron colocar 3 objetos no adyacentes después de muchos intentos.")
 
-            while True:
-                pos2 = (random.randint(0, 6), random.randint(0, 6))
-                if pos2 not in occupied_positions:
-                    self.agent2_x, self.agent2_y = pos2
-                    break
+        # Coloca a los agentes aleatoriamente (en celdas libres)
+        occupied_positions = set(self.objects)
+        while True:
+            pos1 = (random.randint(0, 6), random.randint(0, 6))
+            if pos1 not in occupied_positions:
+                occupied_positions.add(pos1)
+                self.agent1_x, self.agent1_y = pos1
+                break
+
+        while True:
+            pos2 = (random.randint(0, 6), random.randint(0, 6))
+            if pos2 not in occupied_positions:
+                self.agent2_x, self.agent2_y = pos2
+                break
 
         obs1 = self._get_observation_for_agent("agent_1")
         obs2 = self._get_observation_for_agent("agent_2")
@@ -61,12 +76,11 @@ class CollaborativePickUpEnv(ParallelEnv):
             "agent_2": obs2
         }
 
-        infos = {a: {} for a in self.agents}
-
         self.terminations = {a: False for a in self.agents}
         self.truncations = {a: False for a in self.agents}
         self.infos = {a: {} for a in self.agents}
 
+        infos = {a: {} for a in self.agents}
         return observations, infos
 
     def observe(self, agent):
@@ -82,50 +96,39 @@ class CollaborativePickUpEnv(ParallelEnv):
         self._move_agent("agent_1", a1_action)
         self._move_agent("agent_2", a2_action)
 
-        rewards = {"agent_1": -0.01, "agent_2": -0.01}  # Penalización base
+        rewards = {"agent_1": -0.01, "agent_2": -0.01}  # penalización leve por paso
 
-        def _can_pick():
-            for i, (ox, oy) in enumerate(self.objects):
-                if i in self.collected:
-                    continue
-                if (self._is_adjacent(self.agent1_x, self.agent1_y, ox, oy) and
-                        self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy)):
-                    return True
-            return False
+        # Pick-up automático si ambos están adyacentes al mismo objeto
+        for i, (ox, oy) in enumerate(self.objects):
+            if i in self.collected:
+                continue
+            if (
+                    self._is_adjacent(self.agent1_x, self.agent1_y, ox, oy)
+                    and self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy)
+            ):
+                self.collected.add(i)
+                rewards["agent_1"] += 5.0
+                rewards["agent_2"] += 5.0
+                break
 
-        # Intento de pick_up
-        if a1_action == 4 and a2_action == 4:
-            if _can_pick():
-                for i, (ox, oy) in enumerate(self.objects):
-                    if i in self.collected:
-                        continue
-                    if (self._is_adjacent(self.agent1_x, self.agent1_y, ox, oy) and
-                            self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy)):
-                        self.collected.add(i)
-                        rewards["agent_1"] += 5.0
-                        rewards["agent_2"] += 5.0
-                        break
-            else:
-                rewards["agent_1"] -= 0.1
-                rewards["agent_2"] -= 0.1
+        # Recompensas intermedias
 
-        # Recompensas por acercarse a objetos
         for agent_name, (x_now, y_now, x_prev, y_prev) in zip(
                 ["agent_1", "agent_2"],
                 [(self.agent1_x, self.agent1_y, prev_a1_x, prev_a1_y),
                  (self.agent2_x, self.agent2_y, prev_a2_x, prev_a2_y)]
         ):
-            best_prev_dist = min(abs(x_prev - ox) + abs(y_prev - oy) for i, (ox, oy) in enumerate(self.objects) if
-                                 i not in self.collected)
-            best_new_dist = min(
-                abs(x_now - ox) + abs(y_now - oy) for i, (ox, oy) in enumerate(self.objects) if i not in self.collected)
+            remaining_objects = [(ox, oy) for i, (ox, oy) in enumerate(self.objects) if i not in self.collected]
+            if remaining_objects:
+                best_prev_dist = min(abs(x_prev - ox) + abs(y_prev - oy) for (ox, oy) in remaining_objects)
+                best_new_dist = min(abs(x_now - ox) + abs(y_now - oy) for (ox, oy) in remaining_objects)
 
-            if best_new_dist < best_prev_dist:
-                rewards[agent_name] += 0.1
-            elif best_new_dist > best_prev_dist:
-                rewards[agent_name] -= 0.02
+                if best_new_dist < best_prev_dist:
+                    rewards[agent_name] += 0.1
+                elif best_new_dist > best_prev_dist:
+                    rewards[agent_name] -= 0.02
 
-        # Estar adyacente individualmente a objetos
+        # Recompensa por estar adyacente a un objeto
         for i, (ox, oy) in enumerate(self.objects):
             if i in self.collected:
                 continue
@@ -134,28 +137,21 @@ class CollaborativePickUpEnv(ParallelEnv):
             if self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy):
                 rewards["agent_2"] += 0.1
 
-        # Estar ambos adyacentes al mismo objeto
+        # Recompensa extra si ambos están adyacentes al mismo objeto
         for i, (ox, oy) in enumerate(self.objects):
             if i in self.collected:
                 continue
-            if (self._is_adjacent(self.agent1_x, self.agent1_y, ox, oy) and
-                    self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy)):
-                rewards["agent_1"] += 0.3
-                rewards["agent_2"] += 0.3
-
-        # Incentivar acercamiento entre ellos
-        prev_dist = abs(prev_a1_x - prev_a2_x) + abs(prev_a1_y - prev_a2_y)
-        new_dist = abs(self.agent1_x - self.agent2_x) + abs(self.agent1_y - self.agent2_y)
-        if new_dist < prev_dist:
-            rewards["agent_1"] += 0.1
-            rewards["agent_2"] += 0.1
-        elif new_dist > prev_dist:
-            rewards["agent_1"] -= 0.02
-            rewards["agent_2"] -= 0.02
+            if (
+                    self._is_adjacent(self.agent1_x, self.agent1_y, ox, oy)
+                    and self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy)
+            ):
+                rewards["agent_1"] += 0.5
+                rewards["agent_2"] += 0.5
 
         done = len(self.collected) == len(self.objects)
         terminations = {a: done for a in self.agents}
         truncations = {a: self.timestep > 100 for a in self.agents}
+
         self.terminations = terminations
         self.truncations = truncations
         self.infos = {a: {} for a in self.possible_agents}
