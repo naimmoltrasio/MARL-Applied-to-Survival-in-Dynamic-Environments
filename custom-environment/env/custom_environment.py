@@ -2,7 +2,7 @@ import functools
 import random
 from copy import copy
 import numpy as np
-from gymnasium.spaces import Discrete, MultiDiscrete
+from gymnasium.spaces import Discrete, MultiDiscrete, Box
 from pettingzoo import ParallelEnv
 import pygame
 
@@ -11,7 +11,8 @@ class CollaborativePickUpEnv(ParallelEnv):
     metadata = {
         "name": "collaborative_pickup_v0",
         "render_modes": ["human"],
-        "render_fps": 4
+        "render_fps": 4,
+        "is_parallelizable": True
     }
 
     def __init__(self, render_mode="human"):
@@ -30,9 +31,6 @@ class CollaborativePickUpEnv(ParallelEnv):
         self.timestep = 0
         self.collected = set()
 
-        self.agent1_x, self.agent1_y = 0, 0
-        self.agent2_x, self.agent2_y = 6, 6
-
         # Coloca 3 objetos aleatorios en el grid (sin repetir)
         self.objects = []
         while len(self.objects) < 3:
@@ -40,57 +38,174 @@ class CollaborativePickUpEnv(ParallelEnv):
             if pos not in self.objects:
                 self.objects.append(pos)
 
-        obs = self._get_observation()
+            # Coloca a los agentes aleatoriamente (en celdas libres)
+            occupied_positions = set(self.objects)
+            while True:
+                pos1 = (random.randint(0, 6), random.randint(0, 6))
+                if pos1 not in occupied_positions:
+                    occupied_positions.add(pos1)
+                    self.agent1_x, self.agent1_y = pos1
+                    break
+
+            while True:
+                pos2 = (random.randint(0, 6), random.randint(0, 6))
+                if pos2 not in occupied_positions:
+                    self.agent2_x, self.agent2_y = pos2
+                    break
+
+        obs1 = self._get_observation_for_agent("agent_1")
+        obs2 = self._get_observation_for_agent("agent_2")
+
         observations = {
-            "agent_1": {"observation": obs, "action_mask": self._action_mask(self.agent1_x, self.agent1_y)},
-            "agent_2": {"observation": obs, "action_mask": self._action_mask(self.agent2_x, self.agent2_y)},
+            "agent_1": obs1,
+            "agent_2": obs2
         }
 
         infos = {a: {} for a in self.agents}
+
+        self.terminations = {a: False for a in self.agents}
+        self.truncations = {a: False for a in self.agents}
+        self.infos = {a: {} for a in self.agents}
+
         return observations, infos
+
+    def observe(self, agent):
+        return self._get_observation_for_agent(agent)
 
     def step(self, actions):
         a1_action = actions["agent_1"]
         a2_action = actions["agent_2"]
 
-        # Ejecutar movimiento de ambos agentes
+        prev_a1_x, prev_a1_y = self.agent1_x, self.agent1_y
+        prev_a2_x, prev_a2_y = self.agent2_x, self.agent2_y
+
         self._move_agent("agent_1", a1_action)
         self._move_agent("agent_2", a2_action)
 
-        # Recompensas
-        rewards = {"agent_1": 0, "agent_2": 0}
+        rewards = {"agent_1": -0.01, "agent_2": -0.01}  # Penalización base
 
-        # Verificar acción PICK_UP (acción 4)
-        if a1_action == 4 and a2_action == 4:
+        def _can_pick():
             for i, (ox, oy) in enumerate(self.objects):
                 if i in self.collected:
                     continue
-                if (
-                    self._is_adjacent(self.agent1_x, self.agent1_y, ox, oy)
-                    and self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy)
-                ):
-                    self.collected.add(i)
-                    rewards = {"agent_1": 1, "agent_2": 1}
-                    break
+                if (self._is_adjacent(self.agent1_x, self.agent1_y, ox, oy) and
+                        self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy)):
+                    return True
+            return False
 
-        # Termina si levantaron todos los objetos
+        # Intento de pick_up
+        if a1_action == 4 and a2_action == 4:
+            if _can_pick():
+                for i, (ox, oy) in enumerate(self.objects):
+                    if i in self.collected:
+                        continue
+                    if (self._is_adjacent(self.agent1_x, self.agent1_y, ox, oy) and
+                            self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy)):
+                        self.collected.add(i)
+                        rewards["agent_1"] += 5.0
+                        rewards["agent_2"] += 5.0
+                        break
+            else:
+                rewards["agent_1"] -= 0.1
+                rewards["agent_2"] -= 0.1
+
+        # Recompensas por acercarse a objetos
+        for agent_name, (x_now, y_now, x_prev, y_prev) in zip(
+                ["agent_1", "agent_2"],
+                [(self.agent1_x, self.agent1_y, prev_a1_x, prev_a1_y),
+                 (self.agent2_x, self.agent2_y, prev_a2_x, prev_a2_y)]
+        ):
+            best_prev_dist = min(abs(x_prev - ox) + abs(y_prev - oy) for i, (ox, oy) in enumerate(self.objects) if
+                                 i not in self.collected)
+            best_new_dist = min(
+                abs(x_now - ox) + abs(y_now - oy) for i, (ox, oy) in enumerate(self.objects) if i not in self.collected)
+
+            if best_new_dist < best_prev_dist:
+                rewards[agent_name] += 0.1
+            elif best_new_dist > best_prev_dist:
+                rewards[agent_name] -= 0.02
+
+        # Estar adyacente individualmente a objetos
+        for i, (ox, oy) in enumerate(self.objects):
+            if i in self.collected:
+                continue
+            if self._is_adjacent(self.agent1_x, self.agent1_y, ox, oy):
+                rewards["agent_1"] += 0.1
+            if self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy):
+                rewards["agent_2"] += 0.1
+
+        # Estar ambos adyacentes al mismo objeto
+        for i, (ox, oy) in enumerate(self.objects):
+            if i in self.collected:
+                continue
+            if (self._is_adjacent(self.agent1_x, self.agent1_y, ox, oy) and
+                    self._is_adjacent(self.agent2_x, self.agent2_y, ox, oy)):
+                rewards["agent_1"] += 0.3
+                rewards["agent_2"] += 0.3
+
+        # Incentivar acercamiento entre ellos
+        prev_dist = abs(prev_a1_x - prev_a2_x) + abs(prev_a1_y - prev_a2_y)
+        new_dist = abs(self.agent1_x - self.agent2_x) + abs(self.agent1_y - self.agent2_y)
+        if new_dist < prev_dist:
+            rewards["agent_1"] += 0.1
+            rewards["agent_2"] += 0.1
+        elif new_dist > prev_dist:
+            rewards["agent_1"] -= 0.02
+            rewards["agent_2"] -= 0.02
+
         done = len(self.collected) == len(self.objects)
         terminations = {a: done for a in self.agents}
         truncations = {a: self.timestep > 100 for a in self.agents}
+        self.terminations = terminations
+        self.truncations = truncations
+        self.infos = {a: {} for a in self.possible_agents}
 
         if done or self.timestep > 100:
             self.agents = []
 
-        obs = self._get_observation()
         observations = {
-            "agent_1": {"observation": obs, "action_mask": self._action_mask(self.agent1_x, self.agent1_y)},
-            "agent_2": {"observation": obs, "action_mask": self._action_mask(self.agent2_x, self.agent2_y)},
+            "agent_1": self._get_observation_for_agent("agent_1"),
+            "agent_2": self._get_observation_for_agent("agent_2")
         }
 
-        infos = {a: {} for a in self.possible_agents}
         self.timestep += 1
+        return observations, rewards, terminations, truncations, self.infos
 
-        return observations, rewards, terminations, truncations, infos
+    def _get_observation_for_agent(self, agent):
+        # Posiciones de ambos agentes
+        a1 = (self.agent1_x, self.agent1_y)
+        a2 = (self.agent2_x, self.agent2_y)
+
+        if agent == "agent_1":
+            my_x, my_y = a1
+            other_x, other_y = a2
+        else:
+            my_x, my_y = a2
+            other_x, other_y = a1
+
+        # Coordenadas normalizadas
+        my_pos = [my_x / 6, my_y / 6]
+        other_pos = [other_x / 6, other_y / 6]
+
+        object_coords = []
+        object_distances = []
+
+        for i, (ox, oy) in enumerate(self.objects):
+            if i in self.collected:
+                # Objeto recogido → usa marcador especial
+                object_coords.extend([-1.0, -1.0])
+                object_distances.append(2.0)  # máximo valor de distancia normalizada (12/6)
+            else:
+                object_coords.extend([ox / 6, oy / 6])
+                dist = abs(my_x - ox) + abs(my_y - oy)
+                object_distances.append(dist / 12)  # normalizamos distancia máxima (manhattan) posible
+
+        # Distancia al otro agente
+        dist_to_other = abs(my_x - other_x) + abs(my_y - other_y)
+        dist_to_other /= 12  # normalización máxima
+
+        obs = my_pos + other_pos + object_coords + object_distances + [dist_to_other]
+        return np.array(obs, dtype=np.float32)
 
     def _move_agent(self, agent, action):
         if agent == "agent_1":
@@ -142,7 +257,7 @@ class CollaborativePickUpEnv(ParallelEnv):
             (x + 7 * y) if i not in self.collected else 48  # marcamos recogido como 48 (fuera de rango)
             for i, (x, y) in enumerate(self.objects)
         ]
-        return agent1_pos, agent2_pos, *object_pos
+        return np.array([agent1_pos, agent2_pos, *object_pos], dtype=np.float32)
 
     def _is_adjacent(self, ax, ay, ox, oy):
         return abs(ax - ox) + abs(ay - oy) == 1
@@ -180,33 +295,14 @@ class CollaborativePickUpEnv(ParallelEnv):
 
         pygame.display.flip()
         self.clock.tick(self.metadata["render_fps"])
-        """
-        grid = np.full((7, 7), ".", dtype=str)
-        for i, (x, y) in enumerate(self.objects):
-            if i not in self.collected:
-                grid[y, x] = "O"
-        a1 = self.agent1_y, self.agent1_x
-        a2 = self.agent2_y, self.agent2_x
-
-        if grid[a1] == ".":
-            grid[a1] = "A"
-        else:
-            grid[a1] = "X"
-
-        if grid[a2] == ".":
-            grid[a2] = "a"
-        else:
-            grid[a2] = "X"
-
-        print("\n".join([" ".join(row) for row in grid]))
-        print()
-        """
 
 
     @functools.lru_cache(maxsize=None)
     def observation_space(self, agent):
-        # 2 agentes + 3 objetos codificados como celdas (0–48)
-        return MultiDiscrete([49, 49, 49, 49, 49])
+        # 18 valores: 2 agentes (x,y) + 3 objetos (x,y) + 4 distancias (3 objetos + otro agente)
+        low = np.array([0.0] * 4 + [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0] + [0.0] * 4, dtype=np.float32)
+        high = np.array([1.0] * 4 + [1.0] * 6 + [1.0] * 4, dtype=np.float32)
+        return Box(low=low, high=high, dtype=np.float32)
 
     @functools.lru_cache(maxsize=None)
     def action_space(self, agent):
