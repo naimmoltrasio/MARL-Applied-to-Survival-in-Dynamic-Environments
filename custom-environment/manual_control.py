@@ -19,7 +19,7 @@ key_to_action_agent2 = {
 }
 
 def main():
-    env = CollaborativePickUpEnv(render_mode="human")
+    env = CollaborativePickUpEnv(render_mode="human", config="config3")
     obs, _ = env.reset()
     env.render()
     running = True
